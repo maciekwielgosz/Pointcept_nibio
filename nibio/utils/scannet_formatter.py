@@ -7,11 +7,12 @@ import os
 
 
 class ScanNetFormatter:
-    def __init__(self, csv_files, output_dir):
+    def __init__(self, csv_files, output_dir, verbose=False):
         self.csv_files = csv_files
         self.output_dir = output_dir
+        self.verbose = verbose
 
-    def csv_to_ply(self, df, ply_file):
+    def csv_to_ply_clean(self, df, ply_file):
         # Print column names for debugging
         # remove duplicated columns
         df = df.loc[:,~df.columns.duplicated()]
@@ -21,13 +22,60 @@ class ScanNetFormatter:
 
         # Create a structured numpy array with dtype based on the columns of the DataFrame
         dtypes = [(col, 'f4') for col in df.columns]
-        data = np.array(list(map(tuple, df.to_records(index=False))), dtype=dtypes)
+
+        dtypes = [
+            ('x', 'f4'),
+            ('y', 'f4'),
+            ('z', 'f4'),
+            ('intensity', 'uint32')
+        ]
+        
+        df_to_ply = df[['x', 'y', 'z', 'intensity']]
+
+        data = np.array(list(map(tuple, df_to_ply.to_records(index=False))), dtype=dtypes)
 
         # Create a new PlyElement
         vertex = PlyElement.describe(data, 'vertex')
 
         # get just, x, y, z, intensity, label, treeid
-        vertex = PlyElement.describe(data, 'vertex', comments=['x', 'y', 'z', 'intensity', 'label', 'treeid'])
+        # vertex = PlyElement.describe(data, 'vertex', comments=['x', 'y', 'z', 'intensity'])
+
+        ply_data = PlyData([vertex], text=False)
+
+        ply_data.write(ply_file)
+
+
+    def csv_to_ply_labels(self, df, ply_file):
+        # Print column names for debugging
+        # remove duplicated columns
+        df = df.loc[:,~df.columns.duplicated()]
+
+        # Replace spaces in column names with underscores
+        df.columns = [col.replace(' ', '_') for col in df.columns]
+
+        # Create a structured numpy array with dtype based on the columns of the DataFrame
+        dtypes = [(col, 'f4') for col in df.columns]
+
+        # add just the columns we need x, y, z, intensity, label, treeid
+
+        dtypes = [
+            ('x', 'f4'),
+            ('y', 'f4'),
+            ('z', 'f4'),
+            ('intensity', 'uint32'),
+            ('label', 'uint32'),
+            ('treeid', 'uint32')
+        ]
+
+        df_to_ply = df[['x', 'y', 'z', 'intensity', 'label', 'treeid']]
+
+        data = np.array(list(map(tuple, df_to_ply.to_records(index=False))), dtype=dtypes)
+
+        # Create a new PlyElement
+        vertex = PlyElement.describe(data, 'vertex')
+
+        # # get just, x, y, z, intensity, label, treeid
+        # vertex = PlyElement.describe(data, 'vertex', comments=['x', 'y', 'z', 'intensity', 'label', 'treeid'])
 
         ply_data = PlyData([vertex], text=False)
 
@@ -62,36 +110,39 @@ class ScanNetFormatter:
         
         # Group the DataFrame by 'treeid' and 'label'
         grouped = df.groupby(['treeid', 'label'])
-        
-        # Create a set to track unique object IDs
-        unique_object_ids = set()
 
+        if self.verbose:
+            print("Number of groups:", len(grouped))        
+            print("Grouped by treeid and label")
+            # print the combingation of treeid and label
+            for name, group in grouped:
+                print(name)
+
+        
         # Iterate over each group created by the 'treeid' and 'label' columns
         for idx, ((treeid, label), group) in enumerate(grouped):
             # Get the list of indices for the current group
             segments = group.index.tolist()
             
-            # Ensure objectId is unique and corresponds to the 'treeid'
-            if treeid not in unique_object_ids:
-                unique_object_ids.add(treeid)
-            
-                # Append a new segment group to the 'segGroups' list in the aggregation data
-                aggregation_data['segGroups'].append({
-                    "id": idx,
-                    "objectId": treeid,
-                    "segments": segments,
-                    "label": str(label)
-                })
+            # Append a new segment group to the 'segGroups' list in the aggregation data
+            aggregation_data['segGroups'].append({
+                "id": idx,
+                "objectId": treeid,
+                "segments": segments,
+                "label": str(label)
+            })
         
         # Write the aggregation data to the specified file in JSON format
         with open(aggregation_file, 'w') as f:
             json.dump(aggregation_data, f, indent=2)
 
 
+
     def process_plot(self, csv_file):
         plot_name = os.path.splitext(os.path.basename(csv_file))[0]
         scene_id = plot_name
-        ply_file = os.path.join(self.output_dir, f"{plot_name}.ply")
+        ply_file_clean = os.path.join(self.output_dir, f"{plot_name}_vh_clean_2.ply")
+        ply_file_labels = os.path.join(self.output_dir, f"{plot_name}_vh_clean_2.labels.ply")
         segs_file = os.path.join(self.output_dir, f"{plot_name}_vh_clean_2.0.010000.segs.json")
         aggregation_file = os.path.join(self.output_dir, f"{plot_name}.aggregation.json")
         
@@ -99,7 +150,8 @@ class ScanNetFormatter:
         # Convert all column headers to lower case
         df.columns = df.columns.str.lower()
 
-        self.csv_to_ply(df, ply_file)
+        self.csv_to_ply_clean(df, ply_file_clean)
+        self.csv_to_ply_labels(df, ply_file_labels)
         self.generate_segs(df, scene_id, segs_file)
         self.generate_aggregation(df, scene_id, aggregation_file)
 
@@ -111,6 +163,7 @@ def main():
     parser = argparse.ArgumentParser(description='Convert CSV point cloud data to ScanNet format.')
     parser.add_argument('-i', '--input_dir', required=True, help='Directory containing the CSV files')
     parser.add_argument('-o', '--output_dir', required=True, help='Directory to save the output files')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Print verbose output')
     
     args = parser.parse_args()
     # Check if the output directory exists
@@ -118,7 +171,7 @@ def main():
         os.makedirs(args.output_dir)
 
     csv_files = [os.path.join(args.input_dir, file) for file in os.listdir(args.input_dir) if file.endswith('.csv')]
-    formatter = ScanNetFormatter(csv_files, args.output_dir)
+    formatter = ScanNetFormatter(csv_files, args.output_dir, args.verbose)
     formatter.process_all_plots()
 
 if __name__ == '__main__':
