@@ -1,7 +1,7 @@
 #!/bin/sh
 
 cd $(dirname $(dirname "$0")) || exit
-PYTHON=python
+PYTHON=python3
 
 TEST_CODE=test.py
 
