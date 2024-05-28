@@ -14,4 +14,7 @@ outputs/
 */.DS_Store
 **/*.out
 Dockerfile
-sparsehash-sparsehash-2.0.4
+sparsehash-sparsehash-2.0.4/
+csv_test_plots/
+test_plots/
+scannet_test_plots/
