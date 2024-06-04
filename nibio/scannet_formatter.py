@@ -1,9 +1,12 @@
 import pandas as pd
 import numpy as np
+from tqdm import tqdm
 from plyfile import PlyElement, PlyData
 import argparse
 import json
 import os
+from joblib import Parallel, delayed
+from scipy.spatial import Delaunay
 
 
 class ScanNetFormatter:
@@ -36,11 +39,12 @@ class ScanNetFormatter:
 
         # Create a new PlyElement
         vertex = PlyElement.describe(data, 'vertex')
+        
+        faces = self.generate_faces(df[['x', 'y', 'z']])
 
-        # get just, x, y, z, intensity, label, treeid
-        # vertex = PlyElement.describe(data, 'vertex', comments=['x', 'y', 'z', 'intensity'])
+        face_element = PlyElement.describe(faces, 'face')
 
-        ply_data = PlyData([vertex], text=False)
+        ply_data = PlyData([vertex, face_element], text=False)
 
         ply_data.write(ply_file)
 
@@ -74,12 +78,29 @@ class ScanNetFormatter:
         # Create a new PlyElement
         vertex = PlyElement.describe(data, 'vertex')
 
-        # # get just, x, y, z, intensity, label, treeid
-        # vertex = PlyElement.describe(data, 'vertex', comments=['x', 'y', 'z', 'intensity', 'label', 'treeid'])
+        faces = self.generate_faces(df[['x', 'y', 'z']])
 
-        ply_data = PlyData([vertex], text=False)
+        face_element = PlyElement.describe(faces, 'face')
+
+        ply_data = PlyData([vertex, face_element], text=False)
 
         ply_data.write(ply_file)
+
+    def generate_faces(self, points):
+        tri = Delaunay(points[['x', 'y', 'z']])
+        # Ensure only triangles are used
+        faces = []
+        for simplex in tri.simplices:
+            for i in range(4):
+                face = simplex[np.arange(len(simplex)) != i]
+                faces.append((tuple(face),))
+        # faces = np.array(faces, dtype=[('vertex_indices', 'i4', (3,))])
+
+        # format like this: data = np.array(list(map(tuple, df_to_ply.to_records(index=False))), dtype=dtypes)
+        faces = np.array(list(map(tuple, faces)), dtype=[('vertex_indices', 'i4', (3,))])
+
+        return faces
+
 
 
     def generate_segs(self, df, scene_id, segs_file):
@@ -123,7 +144,15 @@ class ScanNetFormatter:
         for idx, ((treeid, label), group) in enumerate(grouped):
             # Get the list of indices for the current group
             segments = group.index.tolist()
-            
+
+            # Map numeric labels to ScanNet category names TODO: change this to take from a file
+            if label == 1:
+                label = "ground"
+            elif label == 2:
+                label = "vegetation"
+            elif label == 4:
+                label = "trunk"
+
             # Append a new segment group to the 'segGroups' list in the aggregation data
             aggregation_data['segGroups'].append({
                 "id": idx,
@@ -155,9 +184,17 @@ class ScanNetFormatter:
         self.generate_segs(df, scene_id, segs_file)
         self.generate_aggregation(df, scene_id, aggregation_file)
 
+        # put files generated for each csv to a folder with the same name as the csv
+        if not os.path.exists(os.path.join(self.output_dir, plot_name)):
+            os.makedirs(os.path.join(self.output_dir, plot_name))
+
+        os.rename(ply_file_clean, os.path.join(self.output_dir, plot_name, f"{plot_name}_vh_clean_2.ply"))
+        os.rename(ply_file_labels, os.path.join(self.output_dir, plot_name, f"{plot_name}_vh_clean_2.labels.ply"))
+        os.rename(segs_file, os.path.join(self.output_dir, plot_name, f"{plot_name}_vh_clean_2.0.010000.segs.json"))
+        os.rename(aggregation_file, os.path.join(self.output_dir, plot_name, f"{plot_name}.aggregation.json"))
+
     def process_all_plots(self):
-        for csv_file in self.csv_files:
-            self.process_plot(csv_file)
+        Parallel(n_jobs=-1)(delayed(self.process_plot)(csv_file) for csv_file in tqdm(self.csv_files))
 
 def main():
     parser = argparse.ArgumentParser(description='Convert CSV point cloud data to ScanNet format.')
